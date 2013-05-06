@@ -8,7 +8,7 @@ from django.contrib import admin, messages
 from django.contrib.admin import widgets
 from django.contrib.admin.options import csrf_protect_m
 from django.core.exceptions import PermissionDenied
-from django.forms import fields
+from django.forms import fields, ChoiceField
 from django.http import HttpResponseRedirect
 from django.shortcuts import render_to_response
 from django.template.context import RequestContext
@@ -50,12 +50,23 @@ if not six.PY3:
     })
 
 
+def get_field_for_setting(name, default=None, help_text="", choices=None):
+    setting_type = type(default) if default is not None else str
+    field_class, kwargs = FIELDS[setting_type]
+    if choices is not None:
+        field_class = fields.TypedChoiceField
+        kwargs["choices"] = choices
+        kwargs["coerce"] = setting_type
+        kwargs["widget"] = forms.Select
+    return field_class(label=name, help_text=help_text, initial=default, **kwargs)
+
+SETTINGS_FIELDS = dict((name, get_field_for_setting(name, *field_config)) for name, field_config in settings.CONFIG.items())
+
+
 class ConstanceForm(forms.Form):
     def __init__(self, *args, **kwargs):
         super(ConstanceForm, self).__init__(*args, **kwargs)
-        for name, (default, help_text) in settings.CONFIG.items():
-            field_class, kwargs = FIELDS[type(default)]
-            self.fields[name] = field_class(label=name, **kwargs)
+        self.fields = SETTINGS_FIELDS
 
     def save(self):
         for name in self.cleaned_data:
@@ -80,11 +91,11 @@ class ConstanceAdmin(admin.ModelAdmin):
         # First load a mapping between config name and default value
         if not self.has_change_permission(request, None):
             raise PermissionDenied
-        default_initial = ((name, default)
-            for name, (default, help_text) in settings.CONFIG.items())
+
+        default_initial = ((name, field.initial) for name, field in SETTINGS_FIELDS.items())
         # Then update the mapping with actually values from the backend
         initial = dict(default_initial,
-            **dict(config._backend.mget(settings.CONFIG.keys())))
+            **dict(config._backend.mget(SETTINGS_FIELDS.keys())))
         form = ConstanceForm(initial=initial)
         if request.method == 'POST':
             form = ConstanceForm(request.POST)
@@ -105,7 +116,7 @@ class ConstanceAdmin(admin.ModelAdmin):
             'form': form,
             'media': self.media + form.media,
         }
-        for name, (default, help_text) in settings.CONFIG.items():
+        for name, field in SETTINGS_FIELDS.items():
             # First try to load the value from the actual backend
             value = initial.get(name)
             # Then if the returned value is None, get the default
@@ -113,10 +124,10 @@ class ConstanceAdmin(admin.ModelAdmin):
                 value = getattr(config, name)
             context['config'].append({
                 'name': name,
-                'default': localize(default),
-                'help_text': _(help_text),
+                'default': localize(field.initial),
+                'help_text': _(field.help_text),
                 'value': localize(value),
-                'modified': value != default,
+                'modified': value != field.initial,
                 'form_field': form[name],
             })
         context['config'].sort(key=itemgetter('name'))

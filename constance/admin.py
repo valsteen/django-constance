@@ -31,6 +31,7 @@ STRING_LIKE = (fields.CharField, {
     'widget': forms.Textarea(attrs={'rows': 3}),
     'required': False,
 })
+ITERABLE_LIKE = (fields.TypedMultipleChoiceField, {'widget': forms.CheckboxSelectMultiple})
 
 FIELDS = {
     bool: (fields.BooleanField, {'required': False}),
@@ -41,6 +42,8 @@ FIELDS = {
     date: (fields.DateField, {'widget': widgets.AdminDateWidget}),
     time: (fields.TimeField, {'widget': widgets.AdminTimeWidget}),
     float: (fields.FloatField, {'widget': NUMERIC_WIDGET}),
+    list: ITERABLE_LIKE,
+    tuple: ITERABLE_LIKE
 }
 
 if not six.PY3:
@@ -52,12 +55,25 @@ if not six.PY3:
 
 def get_field_for_setting(name, default=None, help_text="", choices=None):
     setting_type = type(default) if default is not None else str
-    field_class, kwargs = FIELDS[setting_type]
-    if choices is not None:
-        field_class = fields.TypedChoiceField
+    if setting_type in (list, tuple):
+        setting_item_type = type(default[0]) if default else str
+        if not choices:
+            raise RuntimeError("Choices must be given for a multiple selection setting")
+        if not isinstance(choices[0], (list, tuple)):
+            # unroll tuple
+            choices = zip(choices, choices)
+        field_class, kwargs = FIELDS[setting_type]
         kwargs["choices"] = choices
-        kwargs["coerce"] = setting_type
-        kwargs["widget"] = forms.Select
+        kwargs["coerce"] = setting_item_type
+    else:
+        field_class, kwargs = FIELDS[setting_type]
+
+        if choices is not None:
+            field_class = fields.TypedChoiceField
+            kwargs["choices"] = choices
+            kwargs["coerce"] = setting_type
+            kwargs["widget"] = forms.Select
+
     return field_class(label=name, help_text=help_text, initial=default, **kwargs)
 
 SETTINGS_FIELDS = dict((name, get_field_for_setting(name, *field_config)) for name, field_config in settings.CONFIG.items())
